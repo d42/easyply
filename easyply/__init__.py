@@ -26,6 +26,8 @@ from __future__ import absolute_import
 from itertools import chain
 from functools import wraps
 
+from six import string_types
+
 from .parser import parse as _parse
 from .nodes import NamedTerm
 
@@ -40,7 +42,7 @@ class SingleRuleExpectedError(Exception):
 
 def _coerce_to_ruleset(ruleset):
     def coerce_to_rule(rule):
-        if isinstance(rule, basestring):
+        if isinstance(rule, string_types):
             return _parse(rule)
         else:
             return (rule, )
