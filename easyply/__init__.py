@@ -81,10 +81,11 @@ def expand_optionals(ruleset, format=True, pure_ply=True):
     return list(chain.from_iterable(process_rule(rule) for rule in ruleset))
 
 
-def create_wrapper(rule, fn):
+def create_wrapper(rule, func):
     """
-      Takes a rule (either a Rule object or a string, see `expand_optionals`) and
-      a function and returns the given function wrapped with a decorator that provides:
+      Takes a rule (either a Rule object or a string, see `expand_optionals`)
+      and a function and returns the given function wrapped with expr as var:
+      a decorator that provides:
 
         + Named parameters extraction from the `p` parameter.
         + PLY-compatible docstring (computed from the passed rule).
@@ -95,14 +96,14 @@ def create_wrapper(rule, fn):
     # flattening - we need to iterate over rule terms
     rule = rule.flatten()
 
-    @wraps(fn)
+    @wraps(func)
     def wrapper(p):
         kwargs = {}
         # named parameters extraction
         for i, term in enumerate(rule.terms):
             if isinstance(term, NamedTerm):
                 kwargs[term.name] = p[i + 1]
-        p[0] = fn(**kwargs)
+        p[0] = func(**kwargs)
 
     wrapper.__doc__ = rule.format(pure_ply=True)
 
@@ -119,46 +120,55 @@ def parse(defn, fname=None):
             raise NoDocstringError("Provided function has no docstring")
 
     return _parse(defn.strip())
-    defn = [line.strip() for line in defn.split('\n') if line.strip()]
-    return list(chain.from_iterable(_parse(line) for line in defn))
+    # defn = [line.strip() for line in defn.split('\n') if line.strip()]
+    # return list(chain.from_iterable(_parse(line) for line in defn))
 
 
-def process_function(fn):
+def process_function(func):
     """
       Takes a function with easyply defintion stored in the docstring and
       returns a dictionary of corresponding PLY-compatible functions.
     """
 
-    ruleset = parse(fn.__doc__, fname=fn.__name__)
+    ruleset = parse(func.__doc__, fname=func.__name__)
     expanded = expand_optionals(ruleset, format=False)
 
     ret = {}
     i = 0
     for rule in expanded:
-        ret['p_%s_%s' % (fn.__name__, i)] = create_wrapper(rule, fn)
+        ret['p_%s_%s' % (func.__name__, i)] = create_wrapper(rule, func)
         i += 1
     return ret
 
 
-def process_all(globals, prefix='px_'):
+class ObjectWrapper:
+    def __init__(self, wrapped): self.wrapped = wrapped
+
+    def __getitem__(self, key): return getattr(self.wrapped, key)
+
+    def __setitem__(self, key, value): return setattr(self.wrapped, key, value)
+
+    def items(self): return ((k, self[k]) for k in dir(self.wrapped))
+
+    def __delitem__(self, key):
+        return delattr(self.wrapped.__class__, key)
+
+
+def get_rules(dictionary, prefix='px_'):
+    return [(k, v) for k, v in dictionary.items() if k.startswith(prefix)]
+
+
+def process_all(namespace, prefix='px_'):
     """
-        Applies `process_function` to each function which name starts with `prefix`
-        (`px_` by default). `process_all` accepts either a dictionary or a class and
-        updates it with new functions.
+    Applies `process_function` to each function which name starts with `prefix`
+    (`px_` by default). `process_all` accepts either a dictionary or a class
+    and updates it with new functions.
     """
 
-    if isinstance(globals, dict):
-        names = [name for name in globals
-                 if name.startswith(prefix) and callable(globals[name])]
-        for name in names:
-            fn = globals[name]
-        for name, wrapper in process_function(fn).items():
-            globals[name] = wrapper
-    else:
-        # is an object
-        names = [name for name in dir(globals)
-                 if name.startswith(prefix) and callable(getattr(globals, name))]
-        for name in names:
-            fn = getattr(globals, name)
-        for name, wrapper in process_function(fn).items():
-            setattr(globals, name, wrapper)
+    if not isinstance(namespace, dict):
+        namespace = ObjectWrapper(namespace)
+
+    for f_name, func in get_rules(namespace, prefix):
+        del namespace[f_name]
+        for name, wrapper in process_function(func).items():
+            namespace[name] = wrapper
